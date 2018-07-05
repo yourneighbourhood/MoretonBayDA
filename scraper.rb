@@ -96,6 +96,5 @@ url_ends.each {|url_end|
       page = click(page, next_page_link)
       next_page_link = nil if page.nil?
     end
-    agent.shutdown
     }
   }
