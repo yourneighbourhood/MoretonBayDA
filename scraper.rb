@@ -1,36 +1,23 @@
 require 'scraperwiki'
-require 'rubygems'
 require 'mechanize'
 
-starting_url = 'http://pdonline.moretonbay.qld.gov.au/Modules/ApplicationMaster/default.aspx?page=found&1=thismonth&4a=816&6=F'
-comment_url = 'mailto:mbrc@moretonbay.qld.gov.au?subject='
+# Scraping from Masterview 2.0
 
-def clean_whitespace(a)
-  a.gsub("\r", ' ').gsub("\n", ' ').squeeze(" ").strip
-end
-
-def scrape_table(doc, comment_url)
-  doc.search('table tbody tr').each do |tr|
-    # Columns in table
-    # Show  Number  Submitted  Details
-    tds = tr.search('td')
-
-    break if tds[0].inner_text =~ /There were no records/
-
-    h = tds.map{|td| td.inner_html}
-  
+def scrape_page(page, comment_url)
+  page.at("table.rgMasterTable").search("tr.rgRow,tr.rgAltRow").each do |tr|
+    tds = tr.search('td').map{|t| t.inner_html.gsub("\r\n", "").strip}
+    day, month, year = tds[2].split("/").map{|s| s.to_i}
     record = {
-      'info_url' => (doc.uri + tds[0].at('a')['href']).to_s,
-      'comment_url' => comment_url + CGI::escape("Development Application Enquiry: " + clean_whitespace(h[1])),
-      'council_reference' => clean_whitespace(h[1]),
-      'date_received' => Date.strptime(clean_whitespace(h[2]), '%d/%m/%Y').to_s,
-      'address' => clean_whitespace(tds[3].at('b').inner_text),
-      'description' => CGI::unescapeHTML(clean_whitespace(h[3].split('<br>')[1..-1].join)),
-      'date_scraped' => Date.today.to_s
+      "info_url" => (page.uri + tr.search('td').at('a')["href"]).to_s,
+      "council_reference" => tds[1],
+      "date_received" => Date.new(year, month, day).to_s,
+      "description" => tds[3].gsub("&amp;", "&").split("<br>")[1].squeeze(" ").strip,
+      "address" => tds[3].gsub("&amp;", "&").split("<br>")[0].gsub("\r", " ").gsub("<b>","").gsub("</b>","").squeeze(" ").strip,
+      "date_scraped" => Date.today.to_s,
+      "comment_url" => comment_url
     }
-    
-    #pp record
-    if ScraperWiki.select("* from data where `council_reference`='#{record['council_reference']}'").empty? 
+    #p record
+    if (ScraperWiki.select("* from data where `council_reference`='#{record['council_reference']}'").empty? rescue true)
       ScraperWiki.save_sqlite(['council_reference'], record)
     else
       puts "Skipping already saved record " + record['council_reference']
@@ -38,31 +25,43 @@ def scrape_table(doc, comment_url)
   end
 end
 
-def scrape_and_follow_next_link(doc, comment_url)
-  scrape_table(doc, comment_url)
-  nextButton = doc.at('.rgPageNext')
-  unless nextButton.nil? || nextButton['onclick'] =~ /return false/
-    form = doc.forms.first
-    
-    # The joy of dealing with ASP.NET
-    form['__EVENTTARGET'] = nextButton['name']
-    form['__EVENTARGUMENT'] = ''
-    # It doesn't seem to work without these stupid values being set.
-    # Would be good to figure out where precisely in the javascript these values are coming from.
-    form['ctl00%24RadScriptManager1']=
-      'ctl00%24cphContent%24ctl00%24ctl00%24cphContent%24ctl00%24Radajaxpanel2Panel%7Cctl00%24cphContent%24ctl00%24ctl00%24RadGrid1%24ctl00%24ctl03%24ctl01%24ctl10'
-    form['ctl00_RadScriptManager1_HiddenField']=
-      '%3B%3BSystem.Web.Extensions%2C%20Version%3D3.5.0.0%2C%20Culture%3Dneutral%2C%20PublicKeyToken%3D31bf3856ad364e35%3Aen-US%3A0d787d5c-3903-4814-ad72-296cea810318%3Aea597d4b%3Ab25378d2%3BTelerik.Web.UI%2C%20Version%3D2009.1.527.35%2C%20Culture%3Dneutral%2C%20PublicKeyToken%3D121fae78165ba3d4%3Aen-US%3A1e3fef00-f492-4ed8-96ce-6371bc241e1c%3A16e4e7cd%3Af7645509%3A24ee1bba%3Ae330518b%3A1e771326%3Ac8618e41%3A4cacbc31%3A8e6f0d33%3Aed16cbdc%3A58366029%3Aaa288e2d'
-    doc = form.submit(form.button_with(:name => nextButton['name']))
-    scrape_and_follow_next_link(doc, comment_url)
+# Implement a click on a link that understands stupid asp.net doPostBack
+def click(page, doc)
+  return nil if doc.nil?
+  
+  js = doc["href"] || doc["onclick"]
+  if js =~ /javascript:__doPostBack\('(.*)','(.*)'\)/
+    event_target = $1
+    event_argument = $2
+    form = page.form_with(id: "aspnetForm")
+    form["__EVENTTARGET"] = event_target
+    form["__EVENTARGUMENT"] = event_argument
+    form.submit
+  elsif js =~ /return false;__doPostBack\('(.*)','(.*)'\)/
+    nil
+  else
+    # TODO Just follow the link likes it's a normal link
+    raise
   end
 end
 
+url = "http://pdonline.moretonbay.qld.gov.au/Modules/applicationmaster/default.aspx?page=found&1=thismonth&6=F"
+comment_url = "mailto:mbrc@moretonbay.qld.gov.au"
+
 agent = Mechanize.new
 
-# Jump through bollocks agree screen
-doc = agent.get(starting_url)
-doc = doc.forms.first.submit(doc.forms.first.button_with(:value => "Agree"))
-doc = agent.get(starting_url)
+# Read in a page
+page = agent.get(url)
 
-scrape_and_follow_next_link(doc, comment_url)
+current_page_no = 1
+next_page_link = true
+
+while next_page_link
+  puts "Scraping page #{current_page_no}..."
+  scrape_page(page, comment_url)
+
+  current_page_no += 1
+  next_page_link = page.at(".rgPageNext")
+  page = click(page, next_page_link)
+  next_page_link = nil if page.nil?
+end
