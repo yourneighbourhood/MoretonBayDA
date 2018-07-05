@@ -5,18 +5,17 @@ require 'scraperwiki'
 require 'mechanize'
 require 'date'
 
-
 def scrape_page(page)
-  page.at("table#ctl00_cphContent_ctl01_ctl00_RadGrid1_ctl00 tbody").search("tr").each do |tr|
+  page.at("table.rgMasterTable").search("tr.rgRow,tr.rgAltRow").each do |tr|
     begin
-      tds = tr.search('td').map{|t| t.inner_text.gsub("\r\n", "").strip}
-      day, month, year = tds[3].split("/").map{|s| s.to_i}
+      tds = tr.search('td').map{|t| t.inner_html.gsub("\r\n", "").strip}
+      day, month, year = tds[2].split("/").map{|s| s.to_i}
       record = {
         "info_url" => (page.uri + tr.search('td').at('a')["href"]).to_s,
-        "council_reference" => tds[1].split(" - ")[0].squeeze(" ").strip,
+        "council_reference" => tds[1],
         "date_received" => Date.new(year, month, day).to_s,
-        "description" => tds[1].split(" - ")[1..-1].join(" - ").squeeze(" ").strip,
-        "address" => tds[2].squeeze(" ").strip,
+        "description" => tds[3].gsub("&amp;", "&").split("<br>")[1].to_s.squeeze(" ").strip,
+        "address" => tds[3].gsub("&amp;", "&").split("<br>")[0].gsub("\r", " ").gsub("<strong>","").gsub("</strong>","").squeeze(" ").strip,
         "date_scraped" => Date.today.to_s
       }
       if (ScraperWiki.select("* from data where `council_reference`='#{record['council_reference']}'").empty? rescue true)
@@ -56,7 +55,7 @@ def click(page, doc)
   end
 end
 
-years = [2018, 2017, 2016, 2015, 2014, 2013, 2012, 2011, 2010, 2009, 2008, 2007]
+years = [2017, 2016, 2015, 2014, 2013, 2012, 2011, 2010, 2009, 2008, 2007]
 periodstrs = years.map(&:to_s).product([*'-01'..'-12'].reverse).map(&:join).select{|d| d <= Date.today.to_s[0..-3]}.reverse
 
 url_ends = ['&4=1157', '&4=1158', '&4=1159', '&4=1160', '&4=1151', '&4=1153', '&4=1154', '&4=1156', '&4=1146', '&4=1148', '&4=1149', '&4=1150', '&4=818', '&4=816', '&4=1163', '&4=1161', '&4=1164', '&4=1173', '&4=1165', '&4=1166', '&4=1162', '&4=1170', '&4=1167', '&4=1169', '&4=1168', '&4=1171', '&4=1172', '&4=1307']
