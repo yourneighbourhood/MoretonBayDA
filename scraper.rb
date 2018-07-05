@@ -1,64 +1,54 @@
-# Adapted from planningalerts.org.au to return data
-
-# back to Jan 01, 2007
-
-
-
 require 'scraperwiki'
 
 require 'mechanize'
 
-require 'date'
+
+
+# Scraping from Masterview 2.0
 
 
 
-def scrape_page(page)
+def scrape_page(page, comment_url)
 
-  page.at("table#ctl00_cphContent_ctl01_ctl00_RadGrid1_ctl00 tbody").search("tr").each do |tr|
+  page.at("table.rgMasterTable").search("tr.rgRow,tr.rgAltRow").each do |tr|
 
-    begin
+    tds = tr.search('td').map{|t| t.inner_html.gsub("\r\n", "").strip}
 
-      tds = tr.search('td').map{|t| t.inner_text.gsub("\r\n", "").strip}
+    day, month, year = tds[2].split("/").map{|s| s.to_i}
 
-      day, month, year = tds[3].split("/").map{|s| s.to_i}
+    record = {
 
-      record = {
+      "info_url" => (page.uri + tr.search('td').at('a')["href"]).to_s,
 
-        "info_url" => (page.uri + tr.search('td').at('a')["href"]).to_s,
+      "council_reference" => tds[1],
 
-        "council_reference" => tds[1].split(" - ")[0].squeeze(" ").strip,
+      "date_received" => Date.new(year, month, day).to_s,
 
-        "date_received" => Date.new(year, month, day).to_s,
+      "description" => tds[3].gsub("&amp;", "&").split("<br>")[1].squeeze(" ").strip,
 
-        "description" => tds[1].split(" - ")[1..-1].join(" - ").squeeze(" ").strip,
+      "address" => tds[3].gsub("&amp;", "&").split("<br>")[0].gsub("\r", " ").gsub("<b>","").gsub("</b>","").squeeze(" ").strip,
 
-        "address" => tds[2].squeeze(" ").strip,
+      "date_scraped" => Date.today.to_s,
 
-        "date_scraped" => Date.today.to_s
+      "comment_url" => comment_url
 
-      }
+    }
 
-      if (ScraperWiki.select("* from data where `council_reference`='#{record['council_reference']}'").empty? rescue true)
+    #p record
 
-        ScraperWiki.save_sqlite(['council_reference'], record)
+    if (ScraperWiki.select("* from data where `council_reference`='#{record['council_reference']}'").empty? rescue true)
 
-  #         else
+      ScraperWiki.save_sqlite(['council_reference'], record)
 
-  #           puts "Skipping already saved record " + record['council_reference']
+    else
 
-      end
-
-    rescue
-
-      next
+      puts "Skipping already saved record " + record['council_reference']
 
     end
 
   end
 
 end
-
-
 
 
 
@@ -66,39 +56,35 @@ end
 
 def click(page, doc)
 
-  begin
+  return nil if doc.nil?
 
-    js = doc["href"] || doc["onclick"]
+  
 
-    if js =~ /javascript:__doPostBack\('(.*)','(.*)'\)/
+  js = doc["href"] || doc["onclick"]
 
-      event_target = $1
+  if js =~ /javascript:__doPostBack\('(.*)','(.*)'\)/
 
-      event_argument = $2
+    event_target = $1
 
-      form = page.form_with(id: "aspnetForm")
+    event_argument = $2
 
-      form["__EVENTTARGET"] = event_target
+    form = page.form_with(id: "aspnetForm")
 
-      form["__EVENTARGUMENT"] = event_argument
+    form["__EVENTTARGET"] = event_target
 
-      form.submit
+    form["__EVENTARGUMENT"] = event_argument
 
-    elsif js =~ /return false;__doPostBack\('(.*)','(.*)'\)/
+    form.submit
 
-      nil
-
-    else
-
-      # TODO Just follow the link likes it's a normal link
-
-      raise
-
-    end
-
-  rescue
+  elsif js =~ /return false;__doPostBack\('(.*)','(.*)'\)/
 
     nil
+
+  else
+
+    # TODO Just follow the link likes it's a normal link
+
+    raise
 
   end
 
@@ -106,88 +92,42 @@ end
 
 
 
-years = [2018, 2017, 2016, 2015, 2014, 2013, 2012, 2011, 2010, 2009, 2008, 2007]
+url = "http://pdonline.moretonbay.qld.gov.au/Modules/applicationmaster/default.aspx?page=found&1=thismonth&6=F"
 
-periodstrs = years.map(&:to_s).product([*'-01'..'-12'].reverse).map(&:join).select{|d| d <= Date.today.to_s[0..-3]}.reverse
-
-
-
-url_ends = ['&4=DA_PA_SC_MCU&4a=DA_PA_SC_MCU', '&4=DA_PA_SW_BW&4a=DA_PA_SW_BW', '&4=DA_SPA_SC_MCU_CP&4a=DA_SPA_SC_MCU_CP', '&4=DA_SPA_SW_BLDNG_WORK&4a=DA_SPA_SW_BLDNG_WORK', '&4=DA_MC_MCU_CP&4a=DA_MC_MCU_CP', '&4=DA_BW_BLDNG_WORK&4a=DA_BW_BLDNG_WORK']
+comment_url = "mailto:mbrc@moretonbay.qld.gov.au"
 
 
 
-url_ends.each {|url_end|
-
-  periodstrs.each {|periodstr| 
+agent = Mechanize.new
 
 
 
-    matches = periodstr.scan(/^([0-9]{4})-(0[1-9]|1[0-2])$/)
+# Read in a page
 
-    period = "&1=" + Date.new(matches[0][0].to_i, matches[0][1].to_i, 1).strftime("%d/%m/%Y")
-
-    period = period + "&2=" + Date.new(matches[0][0].to_i, matches[0][1].to_i, -1).strftime("%d/%m/%Y")
+page = agent.get(url)
 
 
 
-    puts "Getting data in `" + periodstr + "`."
+current_page_no = 1
+
+next_page_link = true
 
 
 
-    url = "http://pdonline.moretonbay.qld.gov.au/Modules/ApplicationMaster/default.aspx?page=search" + period + url_end
+while next_page_link
+
+  puts "Scraping page #{current_page_no}..."
+
+  scrape_page(page, comment_url)
 
 
 
-    agent = Mechanize.new
+  current_page_no += 1
 
+  next_page_link = page.at(".rgPageNext")
 
+  page = click(page, next_page_link)
 
-    # Read in a page
+  next_page_link = nil if page.nil?
 
-    page = agent.get(url)
-
-
-
-    form = page.forms.first
-
-    button = form.button_with(value: "I Agree")
-
-    form.submit(button)
-
-    # It doesn't even redirect to the correct place. Ugh
-
-    page = agent.get(url)
-
-
-
-    current_page_no = 1
-
-    next_page_link = true
-
-
-
-    while next_page_link
-
-      if (current_page_no%5) == 0
-
-        puts "Scraping page #{current_page_no}..."
-
-      end
-
-      scrape_page(page)
-
-
-
-      current_page_no += 1
-
-      next_page_link = page.at(".rgPageNext")
-
-      page = click(page, next_page_link)
-
-      next_page_link = nil if page.nil?
-
-    end
-
-    }
-
-  }
+end
