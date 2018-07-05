@@ -61,20 +61,31 @@ url_ends.each {|url_end|
  
 url = "http://pdonline.moretonbay.qld.gov.au/Modules/applicationmaster/default.aspx?page=found&1=thismonth&6=F"
 
-agent = Mechanize.new
+    agent = Mechanize.new
 
-# Read in a page
-page = agent.get(url)
+    # Read in a page
+    page = agent.get(url)
 
-current_page_no = 1
-next_page_link = true
+    form = page.forms.first
+    button = form.button_with(value: "I Agree")
+    form.submit(button)
+    # It doesn't even redirect to the correct place. Ugh
+    page = agent.get(url)
 
-while next_page_link
-  puts "Scraping page #{current_page_no}..."
-  scrape_page(page, comment_url)
+    current_page_no = 1
+    next_page_link = true
 
-  current_page_no += 1
-  next_page_link = page.at(".rgPageNext")
-  page = click(page, next_page_link)
-  next_page_link = nil if page.nil?
-end
+    while next_page_link
+      if (current_page_no%5) == 0
+        puts "Scraping page #{current_page_no}..."
+      end
+      scrape_page(page)
+
+      current_page_no += 1
+      next_page_link = page.at(".rgPageNext")
+      page = click(page, next_page_link)
+      next_page_link = nil if page.nil?
+    end
+    }
+  }
+
